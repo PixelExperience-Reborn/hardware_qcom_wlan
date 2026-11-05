@@ -1,0 +1,105 @@
+name: Android17 Qualcomm WLAN upstream history merge
+
+on:
+  push:
+    branches:
+      - integrate/a17-aosp17-qcom-wlan-20261105
+    paths:
+      - '.github/workflows/a17-qcom-wlan-upstream-merge.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  merge-reviewed-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge the exact official Android 17 WLAN source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/integrate/a17-aosp17-qcom-wlan-20261105"
+          git config user.name "PixelExperience-Reborn CI"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          pe_base=e11906fd983bad90a5cdb7601efbea81f7264c85
+          aosp_commit=b467db6eb6e31cc160a2600d0c8cb4e20c52f3fa
+          aosp_tree=20b83951680bc43da6f697a354b271367ecb59c0
+
+          git merge-base --is-ancestor "$pe_base" HEAD
+          git remote add aosp https://android.googlesource.com/platform/hardware/qcom/wlan
+          git fetch --no-tags aosp refs/tags/android-17.0.0_r1
+          upstream="$(git rev-parse FETCH_HEAD^{commit})"
+          test "$upstream" = "$aosp_commit"
+          test "$(git rev-parse "$upstream^{tree}")" = "$aosp_tree"
+
+          # Keep original PE commits and official AOSP ancestry.
+          # Never silently select ours/theirs on an unknown semantic conflict.
+          git merge-base HEAD "$upstream" >/dev/null || {
+            echo "::error::No shared Git history; requires reviewed import rather than automatic merge"
+            exit 1
+          }
+          if ! git merge --no-ff --no-edit -m "merge: official AOSP17 Qualcomm WLAN with historic PixelExperience" "$upstream"; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            expected="legacy/qcwcn/wifi_hal/common.cpp"
+            if test "$conflicts" != "$expected"; then
+              echo "::error::Unexpected AOSP17 WLAN source conflicts. No push."
+              printf '%s\n' "$conflicts"
+              exit 1
+            fi
+            # The exact reviewed conflict is an obsolete PE relative header
+            # versus the AOSP17 public hardware_legacy header. Retain the
+            # separately merged PE fib_rules kernel-headers fix.
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("legacy/qcwcn/wifi_hal/common.cpp")
+          src = p.read_text()
+          conflict = (
+              "<<<<<<< HEAD\n"
+              "#include \"wifi_hal.h\"\n"
+              "=======\n"
+              "\n"
+              "#include <hardware_legacy/wifi_hal.h>\n"
+              ">>>>>>> b467db6eb6e31cc160a2600d0c8cb4e20c52f3fa\n"
+          )
+          assert src.count(conflict) == 1, "unexpected merge conflict contents"
+          src = src.replace(conflict, "\n#include <hardware_legacy/wifi_hal.h>\n")
+          assert src.count("#include <linux-private/linux/fib_rules.h>") == 1
+          assert '#include "wifi_hal.h"' not in src
+          assert "<<<<<<<" not in src and ">>>>>>>" not in src
+          p.write_text(src)
+          print("PASS: exact header conflict resolved; PE fib_rules fix retained")
+          PY
+            git add legacy/qcwcn/wifi_hal/common.cpp
+            test -z "$(git diff --name-only --diff-filter=U)"
+            git commit -m "merge: resolve WLAN header ABI path preserving PE fib_rules fix"
+          fi
+
+          git merge-base --is-ancestor "$pe_base" HEAD
+          git merge-base --is-ancestor "$aosp_commit" HEAD
+          test -f Android.bp
+          test -f Android.mk
+          test -d legacy
+          test -d wcn6740
+          test -d wcn7760
+          grep -Fq 'wifihal_qcom_defaults' Android.bp
+          grep -Fq 'wcn7760' Android.bp
+          grep -Fq 'wcn7760' Android.mk
+          grep -Fq 'libwifi-hal-qcom' Android.bp
+
+          # Validate only the reviewed divergence, not pre-existing upstream whitespace.
+          git diff --check "$aosp_commit" HEAD
+          git status --porcelain | tee /tmp/a17-wlan-status
+          test ! -s /tmp/a17-wlan-status
+          git log -1 --oneline
+          git push origin HEAD:refs/heads/integrate/a17-aosp17-qcom-wlan-20261105
+
+      - name: Scope of source validation
+        if: always()
+        run: |
+          echo "Source merge and AOSP17 SHA/tree ownership checks only."
+          echo "No Soong, kernel ABI, VINTF, SELinux or physical mondrian Wi-Fi validation."

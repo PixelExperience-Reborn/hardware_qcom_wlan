@@ -1,0 +1,52 @@
+name: Android17 Qualcomm WLAN source integrity
+
+on:
+  push:
+    branches:
+      - integrate/a17-aosp17-qcom-wlan-20261105
+  pull_request:
+    branches:
+      - seventeen
+
+permissions:
+  contents: read
+
+jobs:
+  source-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify pinned official AOSP17 ancestry and reviewed PE Wi-Fi fix
+        run: |
+          set -euo pipefail
+          pe=e11906fd983bad90a5cdb7601efbea81f7264c85
+          upstream=b467db6eb6e31cc160a2600d0c8cb4e20c52f3fa
+          tree=20b83951680bc43da6f697a354b271367ecb59c0
+          git merge-base --is-ancestor "$pe" HEAD
+          git merge-base --is-ancestor "$upstream" HEAD
+          test "$(git rev-parse "$upstream^{tree}")" = "$tree"
+          test -d wcn7760
+          test -d wcn6740
+          test -d legacy
+          python3 - <<'PY'
+          from pathlib import Path
+          bp = Path("Android.bp").read_text()
+          mk = Path("Android.mk").read_text()
+          hal = Path("legacy/qcwcn/wifi_hal/common.cpp").read_text()
+          assert 'name: "wifihal_qcom_defaults"' in bp
+          assert 'name: "libwifi-hal-qcom"' in bp
+          assert "//hardware/qcom/wlan/legacy:" in bp
+          assert 'wcn7760' in mk and 'wcn6740' in mk
+          assert '#include <hardware_legacy/wifi_hal.h>' in hal
+          assert '#include <linux-private/linux/fib_rules.h>' in hal
+          assert '#include "wifi_hal.h"' not in hal
+          assert '<<<<<<<' not in hal and '>>>>>>>' not in hal
+          print("PASS: official Android17 WLAN + PE fib_rules fix, static sources")
+          PY
+          git diff --check "$upstream" HEAD
+      - name: What was not validated
+        run: |
+          echo "Host/source integrity only; NOT an Android17 Soong module build."
+          echo "Do not claim Wi-Fi VINTF/SELinux, firmware ABI or device runtime checks."
