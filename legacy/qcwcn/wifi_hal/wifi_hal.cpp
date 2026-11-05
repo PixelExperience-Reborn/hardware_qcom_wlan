@@ -64,8 +64,12 @@
 #include <netlink/object-api.h>
 #include <netlink/netlink.h>
 #include <netlink/socket.h>
+#if __has_include(<netlink-private/types.h>)
 #include <netlink-private/object-api.h>
 #include <netlink-private/types.h>
+#else
+#include <nl-priv-dynamic-core/nl-core.h>
+#endif
 
 #include "nl80211_copy.h"
 
@@ -82,7 +86,7 @@
 
 #define LOG_TAG  "WifiHAL"
 
-#include "wifi_hal.h"
+#include <hardware_legacy/wifi_hal.h>
 #include "wifi_hal_ctrl.h"
 #include "common.h"
 #include "cpp_bindings.h"
