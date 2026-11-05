@@ -43,18 +43,40 @@ jobs:
             echo "::error::No shared Git history; requires reviewed import rather than automatic merge"
             exit 1
           }
-          if ! git merge --no-ff --no-edit \
-            -m "merge: official AOSP17 Qualcomm WLAN with historic PixelExperience" \
-            "$upstream"; then
-            echo "::error::Conflicting files in Android17 WLAN merge; sources NOT pushed"
-            git diff --name-only --diff-filter=U || true
-            echo "=== common.cpp conflicted hunk context ==="
-            if test -f legacy/qcwcn/wifi_hal/common.cpp; then
-              grep -n -C 26 -E '^(<<<<<<<|=======|>>>>>>>)' legacy/qcwcn/wifi_hal/common.cpp || true
+          if ! git merge --no-ff --no-edit -m "merge: official AOSP17 Qualcomm WLAN with historic PixelExperience" "$upstream"; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            expected="legacy/qcwcn/wifi_hal/common.cpp"
+            if test "$conflicts" != "$expected"; then
+              echo "::error::Unexpected AOSP17 WLAN source conflicts. No push."
+              printf '%s\n' "$conflicts"
+              exit 1
             fi
-            echo "=== merge state (first 20 lines) ==="
-            git status --short | head -20 || true
-            exit 1
+            # The exact reviewed conflict is an obsolete PE relative header
+            # versus the AOSP17 public hardware_legacy header. Retain the
+            # separately merged PE fib_rules kernel-headers fix.
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("legacy/qcwcn/wifi_hal/common.cpp")
+          src = p.read_text()
+          conflict = (
+              "<<<<<<< HEAD\n"
+              "#include \"wifi_hal.h\"\n"
+              "=======\n"
+              "\n"
+              "#include <hardware_legacy/wifi_hal.h>\n"
+              ">>>>>>> b467db6eb6e31cc160a2600d0c8cb4e20c52f3fa\n"
+          )
+          assert src.count(conflict) == 1, "unexpected merge conflict contents"
+          src = src.replace(conflict, "\n#include <hardware_legacy/wifi_hal.h>\n")
+          assert src.count("#include <linux-private/linux/fib_rules.h>") == 1
+          assert '#include "wifi_hal.h"' not in src
+          assert "<<<<<<<" not in src and ">>>>>>>" not in src
+          p.write_text(src)
+          print("PASS: exact header conflict resolved; PE fib_rules fix retained")
+          PY
+            git add legacy/qcwcn/wifi_hal/common.cpp
+            test -z "$(git diff --name-only --diff-filter=U)"
+            git commit -m "merge: resolve WLAN header ABI path preserving PE fib_rules fix"
           fi
 
           git merge-base --is-ancestor "$pe_base" HEAD
