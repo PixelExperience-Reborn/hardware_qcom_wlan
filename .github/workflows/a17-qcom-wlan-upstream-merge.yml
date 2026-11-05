@@ -48,7 +48,12 @@ jobs:
             "$upstream"; then
             echo "::error::Conflicting files in Android17 WLAN merge; sources NOT pushed"
             git diff --name-only --diff-filter=U || true
-            git status --short
+            echo "=== common.cpp conflicted hunk context ==="
+            if test -f legacy/qcwcn/wifi_hal/common.cpp; then
+              grep -n -C 26 -E '^(<<<<<<<|=======|>>>>>>>)' legacy/qcwcn/wifi_hal/common.cpp || true
+            fi
+            echo "=== merge state (first 20 lines) ==="
+            git status --short | head -20 || true
             exit 1
           fi
 
